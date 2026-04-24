@@ -38,9 +38,14 @@ A clean rebuilt MineNet package for remote mining turtles.
 
 ## Clean install on central computer
 
+Install via installer:
+```sh
+wget https://raw.githubusercontent.com/GuilhermeFaga/cc-minenet/refs/heads/main/install.lua install
+```
+
 Copy the `minenet` folder to a disk, place the disk in a disk drive, then run:
 
-```lua
+```sh
 delete /minenet
 copy disk/minenet /minenet
 cd /minenet
@@ -49,7 +54,7 @@ server.lua
 
 Optional installer:
 
-```lua
+```sh
 copy disk/installers/install_server.lua install_server.lua
 install_server.lua
 cd /minenet
@@ -58,7 +63,7 @@ server.lua
 
 ## Clean install on each turtle
 
-```lua
+```sh
 delete /minenet
 copy disk/minenet /minenet
 cd /minenet
