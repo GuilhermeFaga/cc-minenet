@@ -1,62 +1,72 @@
-# MineNet - CC:Tweaked remote mining turtle manager
+# MineNet CC:Tweaked MVP fixed build
 
-MineNet is an MVP remote mining system for CC:Tweaked with:
+This package uses a flat `/minenet` module layout and `require("protocol")`, so it works when files are installed directly under `/minenet`.
 
-- Central server computer
-- Turtle auto-registration over Rednet
-- GPS-based position reporting
-- Turtle colors and IDs
-- Status heartbeat tracking
-- Branch mining job queue
-- Drop-off and fuel point configuration
-- Basic collision avoidance through movement reservations
-- Shared map updates from turtle inspections
-- Optional attached monitor status view
+## Disk layout
 
-## Install
+Copy this to a ComputerCraft disk:
 
-Copy the `minenet` folder to the root of each computer/turtle.
-
-On the central computer:
-
-```lua
-shell.run("/minenet/server.lua")
+```
+minenet/
+  server.lua
+  turtle.lua
+  protocol.lua
+  storage.lua
+  config.lua
+  util.lua
+  nav.lua
+installers/
+  install_server.lua
+  install_turtle.lua
 ```
 
-On each mining turtle:
+## Install central computer
 
-```lua
-shell.run("/minenet/turtle.lua")
+```
+copy disk/minenet /minenet
+cd /minenet
+server.lua
 ```
 
-For autostart, create `/startup.lua`:
+Or run:
 
-```lua
-shell.run("/minenet/server.lua") -- server
+```
+disk/installers/install_server.lua
 ```
 
-or:
+## Install turtle
 
-```lua
-shell.run("/minenet/turtle.lua") -- turtle
+```
+copy disk/minenet /minenet
+cd /minenet
+turtle.lua
 ```
 
-## Required setup
+Or run:
 
-1. Place working GPS hosts in your world.
-2. Give server and turtles wireless modems.
-3. Start the server first.
-4. In the server UI, set:
-   - drop-off point
-   - fuel point
-   - mining area min/max
-5. Generate branch jobs.
-6. Start turtles.
+```
+disk/installers/install_turtle.lua
+```
 
-## Security
+## Requirements
 
-Rednet is not secure. Change the default token in `/minenet/data/config.json` on the server before adding turtles.
+- Wireless modem on server and turtles.
+- GPS network available for turtles.
+- Mining turtle for mining actions.
+- Optional monitor attached to the server.
+
+## Setup
+
+On the server, use the menu to set:
+
+1. Base point
+2. Dropoff point
+3. Fuel point
+4. Mining start point and heading
+5. Branch length
+
+Then start turtles. They auto-register and receive branch jobs.
 
 ## Notes
 
-This is a first working foundation, not the final optimized swarm miner. The next improvements should be A* routing, better heading detection/calibration, chunk-safe scheduling, richer map monitor drawing, and a proper installer that can fetch files over HTTP/Pastebin.
+The shared token defaults to `change-me` in `/minenet/data/config.json`. Change it on the server before deploying many turtles.

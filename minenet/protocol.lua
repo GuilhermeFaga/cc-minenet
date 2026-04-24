@@ -1,64 +1,59 @@
 local protocol = {}
 
 protocol.VERSION = 1
-protocol.DISCOVERY = "minenet.discovery"
-protocol.CONTROL = "minenet.control"
-protocol.STATUS = "minenet.status"
-protocol.MAP = "minenet.map"
-protocol.ROUTE = "minenet.route"
-protocol.HOSTNAME = "minenet.server"
+protocol.NAME_DISCOVERY = "minenet.discovery"
+protocol.NAME_CONTROL = "minenet.control"
+protocol.NAME_STATUS = "minenet.status"
 protocol.DEFAULT_TOKEN = "change-me"
 
-function protocol.now()
-  if os.epoch then return os.epoch("utc") end
-  return math.floor(os.clock() * 1000)
+function protocol.findModemSide()
+  local sides = { "top", "bottom", "left", "right", "front", "back" }
+  for i = 1, #sides do
+    if peripheral.getType(sides[i]) == "modem" then return sides[i] end
+  end
+  return nil
 end
 
-function protocol.message(kind, payload, token, turtle_id)
+function protocol.openModem(side)
+  side = side or protocol.findModemSide()
+  if not side then return false, "no modem found" end
+  if not rednet.isOpen(side) then rednet.open(side) end
+  return true, side
+end
+
+function protocol.msg(t, turtleId, payload, token)
   return {
     version = protocol.VERSION,
     token = token or protocol.DEFAULT_TOKEN,
-    type = kind,
-    turtle_id = turtle_id,
-    time = protocol.now(),
-    payload = payload or {},
+    type = t,
+    turtle_id = turtleId,
+    time = os.epoch and os.epoch("utc") or os.clock(),
+    payload = payload or {}
   }
 end
 
-function protocol.valid(msg, token)
-  return type(msg) == "table" and msg.version == protocol.VERSION and msg.token == token and type(msg.type) == "string"
+function protocol.valid(message, token)
+  if type(message) ~= "table" then return false end
+  if message.version ~= protocol.VERSION then return false end
+  if token and message.token ~= token then return false end
+  if type(message.type) ~= "string" then return false end
+  return true
 end
 
-function protocol.openRednet(preferredSide)
-  if rednet.isOpen and rednet.isOpen() then return true end
-  if preferredSide and peripheral.getType(preferredSide) == "modem" then
-    rednet.open(preferredSide)
-    return true
+function protocol.send(id, protoName, t, turtleId, payload, token)
+  return rednet.send(id, protocol.msg(t, turtleId, payload, token), protoName)
+end
+
+function protocol.broadcast(protoName, t, turtleId, payload, token)
+  rednet.broadcast(protocol.msg(t, turtleId, payload, token), protoName)
+end
+
+function protocol.receive(protoName, timeout, token)
+  while true do
+    local id, message, proto = rednet.receive(protoName, timeout)
+    if not id then return nil, nil, nil end
+    if protocol.valid(message, token) then return id, message, proto end
   end
-  local opened = false
-  for _, side in ipairs(peripheral.getNames()) do
-    if peripheral.getType(side) == "modem" then
-      rednet.open(side)
-      opened = true
-    end
-  end
-  if not opened then error("No modem found. Attach/equip a wired or wireless modem.") end
-  return opened
-end
-
-function protocol.send(id, kind, payload, token, turtle_id, channel)
-  return rednet.send(id, protocol.message(kind, payload, token, turtle_id), channel or protocol.CONTROL)
-end
-
-function protocol.broadcast(kind, payload, token, turtle_id, channel)
-  return rednet.broadcast(protocol.message(kind, payload, token, turtle_id), channel or protocol.DISCOVERY)
-end
-
-function protocol.receive(channel, timeout, token)
-  local id, msg, proto = rednet.receive(channel, timeout)
-  if not id then return nil end
-  if token and not protocol.valid(msg, token) then return nil, "invalid", id, msg, proto end
-  return id, msg, proto
 end
 
 return protocol

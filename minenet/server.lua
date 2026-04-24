@@ -1,236 +1,218 @@
+package.path = package.path .. ";/minenet/?.lua;./?.lua"
+
 local protocol = require("protocol")
 local storage = require("storage")
 local configMod = require("config")
 local util = require("util")
 
-local DATA = "/minenet/data"
-local TURTLES = DATA .. "/turtles.json"
-local JOBS = DATA .. "/jobs.json"
-local MAP = DATA .. "/map.json"
-
-storage.ensureDir(DATA)
 local cfg = configMod.load()
-local turtles = storage.read(TURTLES, {})
-local jobs = storage.read(JOBS, { queue = {}, active = {}, completed = {} })
-local world = storage.read(MAP, { blocks = {}, tunnels = {}, reservations = {} })
-local nextId = storage.read(DATA .. "/next_id.json", { value = 1 })
+local turtles = storage.read("/minenet/data/turtles.json", {})
+local jobs = storage.read("/minenet/data/jobs.json", {})
+local reservations = {}
+local running = true
 
 local function saveAll()
-  storage.write(TURTLES, turtles)
-  storage.write(JOBS, jobs)
-  storage.write(MAP, world)
-  storage.write(DATA .. "/next_id.json", nextId)
+  storage.write("/minenet/data/turtles.json", turtles)
+  storage.write("/minenet/data/jobs.json", jobs)
   configMod.save(cfg)
 end
 
-local function clear()
-  term.clear(); term.setCursorPos(1, 1)
-end
-local function readPos(prompt)
-  print(prompt .. " (uses GPS if blank, or x y z):")
-  write("> ")
-  local line = read()
-  if line == "" then
-    local p = util.gpsPos(5)
-    if not p then
-      print("GPS locate failed."); sleep(1); return nil
-    end
-    return p
-  end
-  local x, y, z = line:match("^%s*(-?%d+)%s+(-?%d+)%s+(-?%d+)%s*$")
-  if not x then
-    print("Invalid position."); sleep(1); return nil
-  end
-  return { x = tonumber(x), y = tonumber(y), z = tonumber(z) }
+local function nextTurtleId()
+  local n = 1
+  while turtles[tostring(n)] do n = n + 1 end
+  return n
 end
 
-local function addBranchJobs()
-  if not cfg.mining.min or not cfg.mining.max then return false, "Set mining area first." end
-  local min, max = cfg.mining.min, cfg.mining.max
-  local spacing = cfg.mining.tunnelSpacing or 3
-  local len = cfg.mining.branchLength or 48
-  local y = min.y
-  for z = min.z, max.z, spacing do
-    table.insert(jobs.queue, {
-      id = "job-" .. protocol.now() .. "-" .. z,
-      type = "mine_branch",
-      start = { x = min.x, y = y, z = z },
-      direction = "east",
-      length = math.min(len, max.x - min.x + 1),
-      height = cfg.mining.branchHeight or 2,
-      state = "queued",
-    })
+local function getPos(prompt)
+  print(prompt)
+  print("Use GPS current position? y/n")
+  local a = read()
+  if a == "y" or a == "Y" then
+    local x, y, z = gps.locate(5)
+    if x then return { x = math.floor(x), y = math.floor(y), z = math.floor(z) } end
+    print("GPS failed; enter manually.")
   end
-  saveAll()
-  return true
-end
-
-local function assignJob(tid)
-  if #jobs.queue == 0 then return nil end
-  local job = table.remove(jobs.queue, 1)
-  job.state = "active"; job.turtle_id = tid; job.assigned = protocol.now()
-  jobs.active[tostring(tid)] = job
-  saveAll()
-  return job
-end
-
-local function getMonitor()
-  for _, name in ipairs(peripheral.getNames()) do
-    if peripheral.getType(name) == "monitor" then return peripheral.wrap(name) end
-  end
+  write("x: "); local x = tonumber(read())
+  write("y: "); local y = tonumber(read())
+  write("z: "); local z = tonumber(read())
+  return { x = x, y = y, z = z }
 end
 
 local function drawStatus(target)
-  local old = term.redirect(target or term.current())
-  term.clear(); term.setCursorPos(1, 1)
-  print("MineNet Manager  ID #" .. os.getComputerID())
-  print("Queue:" ..
-  #jobs.queue .. " Active:" .. (function()
-    local n = 0
-    for _ in pairs(jobs.active) do n = n + 1 end
-    return n
-  end)())
-  print("Drop:" ..
-  (cfg.dropoff and util.key(cfg.dropoff) or "unset") .. " Fuel:" .. (cfg.fuel and util.key(cfg.fuel) or "unset"))
-  print(string.rep("-", 50))
-  print("ID Name       Status     Fuel Inv  Position")
+  target = target or term
+  target.setBackgroundColor(colors.black)
+  target.setTextColor(colors.white)
+  target.clear()
+  target.setCursorPos(1, 1)
+  target.write("MineNet Server")
+  target.setCursorPos(1, 2)
+  target.write("ID Status     Fuel Inv Pos")
+  local row = 3
   for id, t in pairs(turtles) do
-    local age = math.floor((protocol.now() - (t.last or 0)) / 1000)
-    local stale = age > (cfg.heartbeatTimeout or 30)
-    local pos = t.pos and util.key(t.pos) or "?"
-    print(string.format("%2s %-10s %-9s %5s %3s%% %s%s", id, t.name or "?", stale and "offline" or (t.status or "idle"),
-      tostring(t.fuel or "?"), tostring(math.floor((t.inv or 0) * 100)), pos, stale and " !" or ""))
+    target.setCursorPos(1, row)
+    target.setTextColor(t.color or colors.white)
+    local p = t.pos and util.key(t.pos) or "?"
+    local inv = math.floor((t.inventory or 0) * 100)
+    target.write(string.format("%2s %-10s %4s %3d%% %s", id, t.status or "?", tostring(t.fuel or "?"), inv, p))
+    row = row + 1
   end
-  term.redirect(old)
-end
-
-local function drawMap(target)
-  local old = term.redirect(target or term.current())
-  term.clear(); term.setCursorPos(1, 1)
-  print("MineNet live map (top-down)")
-  local minx, maxx, minz, maxz = 999999, -999999, 999999, -999999
-  for _, t in pairs(turtles) do if t.pos then
-      minx = math.min(minx, t.pos.x); maxx = math.max(maxx, t.pos.x); minz = math.min(minz, t.pos.z); maxz = math.max(
-      maxz, t.pos.z)
-    end end
-  if minx == 999999 then
-    print("No turtle positions yet."); term.redirect(old); return
-  end
-  minx, maxx, minz, maxz = minx - 5, maxx + 5, minz - 5, maxz + 5
-  local w, h = term.getSize()
-  local lookup = {}; for id, t in pairs(turtles) do if t.pos then lookup[t.pos.x .. "," .. t.pos.z] = tostring(id):sub(-1) end end
-  for z = minz, math.min(maxz, minz + h - 4) do
-    local line = ""
-    for x = minx, math.min(maxx, minx + w - 1) do line = line .. (lookup[x .. "," .. z] or ".") end
-    print(line)
-  end
-  term.redirect(old)
-end
-
-local function handleMessage(sender, msg, proto)
-  if not protocol.valid(msg, cfg.token) then return end
-  local p = msg.payload or {}
-  if msg.type == "hello" then
-    local existing
-    for id, t in pairs(turtles) do if t.computer_id == sender then existing = id end end
-    local tid = existing or tostring(nextId.value)
-    if not existing then nextId.value = nextId.value + 1 end
-    turtles[tid] = turtles[tid] or {}
-    local t = turtles[tid]
-    t.computer_id = sender; t.name = p.label or ("Turtle-" .. tid); t.color = t.color or util.colorFor(tonumber(tid)); t.status =
-    "registered"; t.last = protocol.now(); t.pos = p.pos
-    protocol.send(sender, "registered", { turtle_id = tonumber(tid), name = t.name, color = t.color, config = cfg },
-      cfg.token, nil, protocol.CONTROL)
-    saveAll()
-  elseif msg.type == "heartbeat" or msg.type == "status" then
-    local tid = tostring(msg.turtle_id or p.turtle_id or "")
-    if tid ~= "" then
-      turtles[tid] = turtles[tid] or { name = "Turtle-" .. tid, color = util.colorFor(tonumber(tid) or 1), computer_id =
-      sender }
-      local t = turtles[tid]
-      t.computer_id = sender; t.last = protocol.now(); t.pos = p.pos or t.pos; t.fuel = p.fuel or t.fuel; t.inv = p.inv or
-      t.inv; t.status = p.status or t.status; t.job_id = p.job_id or t.job_id
-      if not jobs.active[tid] and #jobs.queue > 0 and t.status ~= "need_fuel" and t.status ~= "need_unload" then
-        local job = assignJob(tonumber(tid)); protocol.send(sender, "job_assign", { job = job }, cfg.token, tonumber(tid),
-          protocol.CONTROL)
-      end
-      saveAll()
-    end
-  elseif msg.type == "job_done" then
-    local tid = tostring(msg.turtle_id)
-    local job = jobs.active[tid]
-    if job then
-      job.state = "completed"; job.completed = protocol.now(); table.insert(jobs.completed, job); jobs.active[tid] = nil
-    end
-    saveAll()
-  elseif msg.type == "map_update" then
-    for k, v in pairs(p.blocks or {}) do world.blocks[k] = v end
-    saveAll()
-  elseif msg.type == "reserve_move" then
-    local to = p.to; local from = p.from; local key = to and util.key(to)
-    local ok = true; local reason = nil
-    if key and world.reservations[key] and world.reservations[key] ~= msg.turtle_id then
-      ok = false; reason = "reserved"
-    end
-    for id, t in pairs(turtles) do if tostring(id) ~= tostring(msg.turtle_id) and util.eq(t.pos, to) then
-        ok = false; reason = "occupied"
-      end end
-    if ok and key then world.reservations[key] = msg.turtle_id end
-    protocol.send(sender, ok and "reserve_ok" or "reserve_denied", { from = from, to = to, reason = reason }, cfg.token,
-      msg.turtle_id, protocol.ROUTE)
-  elseif msg.type == "release_pos" then
-    if p.pos then world.reservations[util.key(p.pos)] = nil end
-  end
-end
-
-local function networkLoop()
-  protocol.openRednet(cfg.modemSide)
-  pcall(rednet.host, protocol.DISCOVERY, protocol.HOSTNAME)
-  while true do
-    local sender, msg, proto = rednet.receive(nil, 0.5)
-    if sender then handleMessage(sender, msg, proto) end
-  end
-end
-
-local function uiLoop()
-  while true do
-    clear(); drawStatus()
-    print("\n1 Set dropoff  2 Set fuel  3 Set area")
-    print("4 Generate branch jobs  5 Save  6 Map")
-    print("7 Recall all  8 Pause all  9 Resume all")
-    print("Enter refreshes. Ctrl+T exits.")
-    write("> ")
-    local s = read(nil, nil, function() return { "1", "2", "3", "4", "5", "6", "7", "8", "9" } end)
-    if s == "1" then
-      cfg.dropoff = readPos("Drop-off point") or cfg.dropoff; saveAll()
-    elseif s == "2" then
-      cfg.fuel = readPos("Fuel point") or cfg.fuel; saveAll()
-    elseif s == "3" then
-      cfg.mining.min = readPos("Mining min corner") or cfg.mining.min; cfg.mining.max = readPos("Mining max corner") or
-      cfg.mining.max; saveAll()
-    elseif s == "4" then
-      local ok, err = addBranchJobs(); if not ok then
-        print(err); sleep(1)
-      end
-    elseif s == "5" then
-      saveAll()
-    elseif s == "6" then
-      clear(); drawMap(); print("Press enter"); read()
-    elseif s == "7" or s == "8" or s == "9" then
-      local cmd = s == "7" and "recall" or s == "8" and "pause" or "resume"; protocol.broadcast(cmd, {}, cfg.token, nil,
-        protocol.CONTROL)
-    end
-  end
+  target.setTextColor(colors.white)
 end
 
 local function monitorLoop()
-  while true do
-    local mon = getMonitor()
+  while running do
+    drawStatus(term)
+    local mon = util.firstPeripheral("monitor")
     if mon then
-      mon.setTextScale(0.5); drawStatus(mon)
+      mon.setTextScale(0.5)
+      drawStatus(mon)
     end
     sleep(2)
   end
 end
 
-parallel.waitForAny(networkLoop, uiLoop, monitorLoop)
+local function makeJob(turtleId)
+  if not cfg.area or not cfg.area.start then return nil end
+  local id = "job-" .. tostring(os.epoch and os.epoch("utc") or os.clock()) .. "-" .. tostring(turtleId)
+  local offset = (#jobs + turtleId - 1) * (cfg.branch_spacing or 3)
+  local start = { x = cfg.area.start.x, y = cfg.area.start.y, z = cfg.area.start.z + offset }
+  local job = {
+    id = id,
+    type = "branch",
+    start = start,
+    heading = cfg.area.heading or 1,
+    length = cfg.branch_length or
+        32,
+    height = cfg.tunnel_height or 2,
+    assigned = turtleId,
+    status = "assigned"
+  }
+  table.insert(jobs, job)
+  return job
+end
+
+local function registerTurtle(sender, msg)
+  local payload = msg.payload or {}
+  local existing = nil
+  for id, t in pairs(turtles) do
+    if t.computer_id == payload.computer_id then existing = tonumber(id) end
+  end
+  local id = existing or nextTurtleId()
+  turtles[tostring(id)] = turtles[tostring(id)] or {}
+  local t = turtles[tostring(id)]
+  t.computer_id = payload.computer_id
+  t.rednet_id = sender
+  t.label = payload.label or ("Turtle-" .. id)
+  t.color = t.color or util.colors[((id - 1) % #util.colors) + 1]
+  t.pos = payload.pos
+  t.status = "registered"
+  t.last_seen = os.clock()
+  saveAll()
+  protocol.send(sender, protocol.NAME_CONTROL, "registered", id, {
+    turtle_id = id, color = t.color, token = cfg.token, dropoff = cfg.dropoff, fuel = cfg.fuel, base = cfg.base
+  }, cfg.token)
+end
+
+local function occupiedByOther(turtleId, to)
+  local k = util.key(to)
+  for id, t in pairs(turtles) do
+    if tonumber(id) ~= turtleId and t.pos and util.key(t.pos) == k then return true end
+  end
+  return reservations[k] and reservations[k] ~= turtleId
+end
+
+local function networkLoop()
+  while running do
+    local sender, msg, proto = rednet.receive(0.5)
+    if sender and type(msg) == "table" then
+      if msg.type == "hello" then
+        registerTurtle(sender, msg)
+      elseif protocol.valid(msg, cfg.token) then
+        local id = tostring(msg.turtle_id or "")
+        local t = turtles[id]
+        if t then
+          t.rednet_id = sender
+          t.last_seen = os.clock()
+          local p = msg.payload or {}
+          if msg.type == "heartbeat" or msg.type == "status" then
+            t.status = p.status or t.status
+            t.pos = p.pos or t.pos
+            t.fuel = p.fuel or t.fuel
+            t.inventory = p.inventory or t.inventory
+            if not t.job then
+              local job = makeJob(tonumber(id))
+              if job then
+                t.job = job.id; protocol.send(sender, protocol.NAME_CONTROL, "job_assign", tonumber(id), job, cfg.token)
+              end
+            end
+          elseif msg.type == "reserve_move" then
+            local to = p.to
+            if to and not occupiedByOther(tonumber(id), to) then
+              reservations[util.key(to)] = tonumber(id)
+              protocol.send(sender, protocol.NAME_CONTROL, "reserve_ok", tonumber(id), { to = to }, cfg.token)
+            else
+              protocol.send(sender, protocol.NAME_CONTROL, "reserve_denied", tonumber(id), { reason = "occupied" },
+                cfg.token)
+            end
+          elseif msg.type == "move_result" then
+            if p.pos then t.pos = p.pos end
+            reservations = {}
+          elseif msg.type == "job_done" then
+            t.job = nil
+            t.status = "idle"
+          elseif msg.type == "need_unload" then
+            protocol.send(sender, protocol.NAME_CONTROL, "go_unload", tonumber(id), { dropoff = cfg.dropoff }, cfg.token)
+          elseif msg.type == "need_fuel" then
+            protocol.send(sender, protocol.NAME_CONTROL, "go_fuel", tonumber(id), { fuel = cfg.fuel }, cfg.token)
+          end
+          saveAll()
+        end
+      end
+    end
+  end
+end
+
+local function menuLoop()
+  while running do
+    util.clear(term)
+    print("MineNet Manager")
+    print("1 Set base point")
+    print("2 Set dropoff point")
+    print("3 Set fuel point")
+    print("4 Set mining start")
+    print("5 Set branch length")
+    print("6 Show turtles")
+    print("7 Save")
+    print("8 Quit")
+    write("> ")
+    local c = read()
+    if c == "1" then
+      cfg.base = getPos("Base point")
+    elseif c == "2" then
+      cfg.dropoff = getPos("Dropoff point")
+    elseif c == "3" then
+      cfg.fuel = getPos("Fuel point")
+    elseif c == "4" then
+      cfg.area = cfg.area or {}; cfg.area.start = getPos("Mining start point"); write("Heading 0=N 1=E 2=S 3=W: "); cfg.area.heading =
+          tonumber(read()) or 1
+    elseif c == "5" then
+      write("Branch length: "); cfg.branch_length = tonumber(read()) or cfg.branch_length
+    elseif c == "6" then
+      util.clear(term); drawStatus(term); print("Press enter"); read()
+    elseif c == "7" then
+      saveAll(); print("Saved"); sleep(1)
+    elseif c == "8" then
+      running = false
+    end
+  end
+end
+
+local ok, side = protocol.openModem()
+if not ok then
+  print("MineNet server error: " .. side); return
+end
+rednet.host(protocol.NAME_DISCOVERY, "minenet-server")
+print("MineNet server started on modem " .. side)
+sleep(1)
+parallel.waitForAny(networkLoop, monitorLoop, menuLoop)
+saveAll()

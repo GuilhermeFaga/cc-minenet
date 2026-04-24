@@ -1,6 +1,9 @@
-local files = {"protocol.lua","storage.lua","config.lua","util.lua","nav.lua","turtle.lua"}
-if not fs.exists("/minenet") then fs.makeDir("/minenet") end
-if not fs.exists("/minenet/data") then fs.makeDir("/minenet/data") end
-if fs.exists("/disk/minenet") then for _, f in ipairs(files) do fs.copy("/disk/minenet/"..f, "/minenet/"..f) end end
-local h = fs.open("/startup.lua", "w"); h.write('shell.run("/minenet/turtle.lua")\n'); h.close()
-print("Installed MineNet turtle. Make sure token matches server, then reboot.")
+local src = "disk/minenet"
+if not fs.exists(src) then src = "/disk/minenet" end
+if not fs.exists(src) then error("Put the minenet folder on a disk first") end
+if fs.exists("/minenet") then fs.delete("/minenet") end
+fs.copy(src, "/minenet")
+local h = fs.open("/startup.lua", "w")
+h.writeLine('shell.run("/minenet/turtle.lua")')
+h.close()
+print("MineNet turtle installed. Reboot or run /startup.lua")

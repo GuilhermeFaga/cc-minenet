@@ -5,37 +5,22 @@ config.path = "/minenet/data/config.json"
 
 config.defaults = {
   token = "change-me",
-  modemSide = nil,
-  heartbeatTimeout = 30,
-  movementTimeout = 6,
-  inventoryFullRatio = 0.85,
-  fuelSafetyMargin = 100,
+  heartbeat_timeout = 30,
+  fuel_margin = 100,
+  inventory_return_ratio = 0.85,
   base = nil,
   dropoff = nil,
   fuel = nil,
-  mining = {
-    min = nil,
-    max = nil,
-    mode = "branch",
-    tunnelSpacing = 3,
-    branchLength = 48,
-    branchHeight = 2,
-  },
-  blacklist = {
-    ["minecraft:lava"] = true,
-    ["minecraft:water"] = false,
-    ["minecraft:bedrock"] = true,
-  },
+  area = nil,
+  branch_length = 32,
+  branch_spacing = 3,
+  tunnel_height = 2
 }
 
 local function merge(a, b)
   local out = {}
-  for k, v in pairs(a or {}) do
-    if type(v) == "table" then out[k] = merge(v, {}) else out[k] = v end
-  end
-  for k, v in pairs(b or {}) do
-    if type(v) == "table" and type(out[k]) == "table" then out[k] = merge(out[k], v) else out[k] = v end
-  end
+  for k, v in pairs(a or {}) do out[k] = v end
+  for k, v in pairs(b or {}) do out[k] = v end
   return out
 end
 
@@ -44,7 +29,7 @@ function config.load()
 end
 
 function config.save(c)
-  storage.write(config.path, c)
+  return storage.write(config.path, c)
 end
 
 return config
