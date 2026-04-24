@@ -1,4 +1,4 @@
-local storage = require("minenet.storage")
+local storage = require("storage")
 local config = {}
 
 config.path = "/minenet/data/config.json"

@@ -1,7 +1,7 @@
-local protocol = require("minenet.protocol")
-local storage = require("minenet.storage")
-local util = require("minenet.util")
-local nav = require("minenet.nav")
+local protocol = require("protocol")
+local storage = require("storage")
+local util = require("util")
+local nav = require("nav")
 
 local DATA = "/minenet/data"
 local ID_PATH = DATA.."/identity.json"

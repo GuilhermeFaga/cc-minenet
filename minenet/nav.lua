@@ -1,5 +1,5 @@
-local protocol = require("minenet.protocol")
-local util = require("minenet.util")
+local protocol = require("protocol")
+local util = require("util")
 local nav = {}
 nav.heading = 0 -- 0 north -z, 1 east +x, 2 south +z, 3 west -x
 nav.pos = nil
