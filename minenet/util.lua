@@ -130,13 +130,14 @@ function util.safeColor(target, color)
 end
 
 function util.statusColor(status)
-  if status == "out_of_fuel" then return colors.red end
-  if status == "fuel_station_empty" then return colors.orange end
-  if status == "inventory_full" then return colors.orange end
+  if status == "error" or status == "out_of_fuel" then return colors.red end
+  if status == "fuel_station_empty" or status == "inventory_full" or status == "dropoff_full" or status == "recall_blocked" then return
+    colors.orange end
   if status == "mining" then return colors.lime end
-  if status == "moving" or status == "returning" or status == "to_fuel" then return colors.cyan end
-  if status == "refueling" or status == "unloading" then return colors.yellow end
-  if status == "paused" then return colors.yellow end
+  if status == "moving" or status == "returning" or status == "to_fuel" or status == "waiting_path" or status == "waiting_fuel" or status == "waiting_dropoff" then return
+    colors.cyan end
+  if status == "refueling" or status == "unloading" or status == "paused" or status == "resetting" or status == "reset_sent" then return
+    colors.yellow end
   if status == "offline" then return colors.gray or colors.grey end
   return colors.white
 end

@@ -15,6 +15,7 @@ local files = {
   "util.lua",
   "config.lua",
   "fuel.lua",
+  "logger.lua",
   "server.lua",
   "nav.lua",
   "turtle.lua"
