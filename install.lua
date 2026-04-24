@@ -1,12 +1,13 @@
 local repo = "https://raw.githubusercontent.com/GuilhermeFaga/cc-minenet/main/"
 local files = {
-  "server.lua",
-  "turtle.lua",
-  "protocol.lua",
-  "util.lua",
-  "nav.lua",
   "config.lua",
+  "fuel.lua",
+  "nav.lua",
+  "protocol.lua",
+  "server.lua",
   "storage.lua",
+  "turtle.lua",
+  "util.lua"
 }
 
 local target = "/minenet"
