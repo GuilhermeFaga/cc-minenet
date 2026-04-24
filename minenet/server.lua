@@ -60,8 +60,10 @@ local function drawStatus(target)
 end
 
 local function monitorLoop()
+  -- Only draw to an attached monitor. Do not redraw the main terminal here,
+  -- because the menu uses read() prompts. Redrawing the terminal while read()
+  -- is active makes options like 4 appear to do nothing.
   while running do
-    drawStatus(term)
     local mon = util.firstPeripheral("monitor")
     if mon then
       mon.setTextScale(0.5)
@@ -76,17 +78,8 @@ local function makeJob(turtleId)
   local id = "job-" .. tostring(os.epoch and os.epoch("utc") or os.clock()) .. "-" .. tostring(turtleId)
   local offset = (#jobs + turtleId - 1) * (cfg.branch_spacing or 3)
   local start = { x = cfg.area.start.x, y = cfg.area.start.y, z = cfg.area.start.z + offset }
-  local job = {
-    id = id,
-    type = "branch",
-    start = start,
-    heading = cfg.area.heading or 1,
-    length = cfg.branch_length or
-        32,
-    height = cfg.tunnel_height or 2,
-    assigned = turtleId,
-    status = "assigned"
-  }
+  local job = { id = id, type = "branch", start = start, heading = cfg.area.heading or 1, length = cfg.branch_length or
+  32, height = cfg.tunnel_height or 2, assigned = turtleId, status = "assigned" }
   table.insert(jobs, job)
   return job
 end
@@ -193,8 +186,13 @@ local function menuLoop()
     elseif c == "3" then
       cfg.fuel = getPos("Fuel point")
     elseif c == "4" then
-      cfg.area = cfg.area or {}; cfg.area.start = getPos("Mining start point"); write("Heading 0=N 1=E 2=S 3=W: "); cfg.area.heading =
-          tonumber(read()) or 1
+      cfg.area = cfg.area or {}
+      cfg.area.start = getPos("Mining start point")
+      write("Heading 0=N 1=E 2=S 3=W: ")
+      cfg.area.heading = tonumber(read()) or 1
+      saveAll()
+      print("Mining start saved: " .. util.key(cfg.area.start) .. " heading " .. tostring(cfg.area.heading))
+      sleep(1.5)
     elseif c == "5" then
       write("Branch length: "); cfg.branch_length = tonumber(read()) or cfg.branch_length
     elseif c == "6" then
