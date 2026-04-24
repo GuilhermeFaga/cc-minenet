@@ -1,4 +1,4 @@
-# MineNet clean v2 for CC:Tweaked / CraftOS
+# MineNet clean v3 for CC:Tweaked / CraftOS
 
 A clean rebuilt MineNet package for remote mining turtles.
 
@@ -38,14 +38,9 @@ A clean rebuilt MineNet package for remote mining turtles.
 
 ## Clean install on central computer
 
-Install via installer:
-```sh
-wget https://raw.githubusercontent.com/GuilhermeFaga/cc-minenet/refs/heads/main/install.lua install
-```
-
 Copy the `minenet` folder to a disk, place the disk in a disk drive, then run:
 
-```sh
+```lua
 delete /minenet
 copy disk/minenet /minenet
 cd /minenet
@@ -54,7 +49,7 @@ server.lua
 
 Optional installer:
 
-```sh
+```lua
 copy disk/installers/install_server.lua install_server.lua
 install_server.lua
 cd /minenet
@@ -63,7 +58,7 @@ server.lua
 
 ## Clean install on each turtle
 
-```sh
+```lua
 delete /minenet
 copy disk/minenet /minenet
 cd /minenet
@@ -128,3 +123,14 @@ The server dashboard shows fuel amount, fuel item count, inventory percent, posi
 - GPS must be available for reliable positioning.
 - Rednet is not secure by itself. Change the token in `/minenet/data/config.tbl` once the system is installed if you play on a shared server.
 - This is still intentionally conservative: turtles dig simple branch tunnels and use a Manhattan route planner. The server collects map data for future path optimization.
+
+
+## v3 bugfix notes
+
+- Out-of-fuel now resumes as soon as any usable fuel is inserted, instead of waiting for the full target amount.
+- After refuelling during a job, the turtle returns to its previous working status instead of staying idle.
+- Recall is now rebroadcast by the server until active turtles stop mining/moving.
+- Unloading now retries blocked slots, reports `dropoff_full`, and keeps only a small configurable fuel reserve.
+- Mining jobs now support `tunnel_width` and clear the whole width x height slice before moving to the next forward step.
+
+Configure tunnel size with option 4 on the server. Width 3 and height 3 are good defaults.

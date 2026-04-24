@@ -5,7 +5,7 @@ local storage = require("storage")
 local configMod = require("config")
 local util = require("util")
 
-local VERSION = "MineNet clean v2"
+local VERSION = "MineNet clean v3"
 local TURTLES_PATH = "/minenet/data/turtles.tbl"
 local JOBS_PATH = "/minenet/data/jobs.tbl"
 local MAP_PATH = "/minenet/data/map.tbl"
@@ -77,10 +77,14 @@ local function promptMining()
   cfg.area.heading = util.readHeading("Tunnel heading? 0=N 1=E 2=S 3=W", cfg.area.heading or 1)
   cfg.branch_length = util.readNumber("Branch length [" .. tostring(cfg.branch_length or 48) .. "]: ",
     cfg.branch_length or 48)
-  cfg.branch_spacing = util.readNumber("Lane spacing [" .. tostring(cfg.branch_spacing or 3) .. "]: ",
-    cfg.branch_spacing or 3)
-  cfg.tunnel_height = util.readNumber("Tunnel height [" .. tostring(cfg.tunnel_height or 2) .. "]: ",
-    cfg.tunnel_height or 2)
+  cfg.tunnel_width = util.readNumber("Tunnel width [" .. tostring(cfg.tunnel_width or 3) .. "]: ", cfg.tunnel_width or 3)
+  if cfg.tunnel_width < 1 then cfg.tunnel_width = 1 end
+  cfg.tunnel_height = util.readNumber("Tunnel height [" .. tostring(cfg.tunnel_height or 3) .. "]: ",
+    cfg.tunnel_height or 3)
+  if cfg.tunnel_height < 1 then cfg.tunnel_height = 1 end
+  local suggestedSpacing = math.max(cfg.tunnel_width + 2, cfg.branch_spacing or 0)
+  cfg.branch_spacing = util.readNumber("Lane center spacing [" .. tostring(suggestedSpacing) .. "]: ", suggestedSpacing)
+  if cfg.branch_spacing < cfg.tunnel_width then cfg.branch_spacing = cfg.tunnel_width end
   cfg.max_jobs = util.readNumber("Max jobs [" .. tostring(cfg.max_jobs or 500) .. "]: ", cfg.max_jobs or 500)
   write("Reset lane counter? y/N: ")
   local reset = read()
@@ -182,7 +186,14 @@ local function registerTurtle(sender, msg)
     area = cfg.area,
     branch_length = cfg.branch_length,
     branch_spacing = cfg.branch_spacing,
-    tunnel_height = cfg.tunnel_height
+    tunnel_width = cfg.tunnel_width,
+    tunnel_height = cfg.tunnel_height,
+    fuel_min = cfg.fuel_min,
+    fuel_margin = cfg.fuel_margin,
+    fuel_target = cfg.fuel_target,
+    player_resume_fuel = cfg.player_resume_fuel,
+    keep_fuel_on_unload = cfg.keep_fuel_on_unload,
+    fuel_keep_items = cfg.fuel_keep_items
   }, cfg.token)
   saveAll()
 end
@@ -202,7 +213,8 @@ local function updateTurtle(id, sender, payload)
   t.fuel_slots = payload.fuel_slots or t.fuel_slots
   t.inventory = payload.inventory or t.inventory
   t.free_slots = payload.free_slots or t.free_slots
-  t.job = payload.job_id or t.job
+  if payload.job_id ~= nil then t.job = payload.job_id end
+  if payload.clear_job then t.job = nil end
   t.paused = payload.paused
   t.recall = payload.recall
 end
@@ -225,7 +237,8 @@ local function createJob(turtleId)
   cfg.next_lane = lane + 1
 
   local heading = util.normHeading(cfg.area.heading or 1)
-  local offset = laneOffset(lane) * (cfg.branch_spacing or 3)
+  local spacing = math.max(cfg.branch_spacing or math.max((cfg.tunnel_width or 1) + 2, 3), cfg.tunnel_width or 1)
+  local offset = laneOffset(lane) * spacing
   local sideDir = util.dirForHeading((heading + 1) % 4)
   local start = {
     x = cfg.area.start.x + sideDir.x * offset,
@@ -242,7 +255,8 @@ local function createJob(turtleId)
     start = start,
     heading = heading,
     length = cfg.branch_length or 48,
-    height = cfg.tunnel_height or 2,
+    width = cfg.tunnel_width or 3,
+    height = cfg.tunnel_height or 3,
     assigned = turtleId,
     status = "assigned",
     created = os.epoch and os.epoch("utc") or os.clock()
@@ -252,10 +266,11 @@ local function createJob(turtleId)
 end
 
 local function canAssignJob(t)
+  if cfg.recall_all then return false end
   if not t then return false end
   if t.job then return false end
   local s = t.status or ""
-  if s == "out_of_fuel" or s == "fuel_station_empty" or s == "inventory_full" then return false end
+  if s == "out_of_fuel" or s == "fuel_station_empty" or s == "inventory_full" or s == "dropoff_full" or s == "recall_blocked" then return false end
   if s == "mining" or s == "moving" or s == "returning" or s == "unloading" or s == "refueling" or s == "to_fuel" then return false end
   return true
 end
@@ -297,12 +312,15 @@ local function sendConfigUpdate()
     area = cfg.area,
     branch_length = cfg.branch_length,
     branch_spacing = cfg.branch_spacing,
+    tunnel_width = cfg.tunnel_width,
     tunnel_height = cfg.tunnel_height,
     inventory_return_ratio = cfg.inventory_return_ratio,
     fuel_min = cfg.fuel_min,
     fuel_margin = cfg.fuel_margin,
     fuel_target = cfg.fuel_target,
-    keep_fuel_on_unload = cfg.keep_fuel_on_unload
+    player_resume_fuel = cfg.player_resume_fuel,
+    keep_fuel_on_unload = cfg.keep_fuel_on_unload,
+    fuel_keep_items = cfg.fuel_keep_items
   })
 end
 
@@ -417,7 +435,8 @@ local function drawDashboard(target, compact)
   target.setCursorPos(1, 3)
   target.setTextColor(colors.gray or colors.grey)
   local mine = cfg.area and cfg.area.start and
-  (util.formatPos(cfg.area.start) .. " " .. util.headingName(cfg.area.heading)) or "unset"
+  (util.formatPos(cfg.area.start) .. " " .. util.headingName(cfg.area.heading) .. " " .. tostring(cfg.tunnel_width or 1) .. "x" .. tostring(cfg.tunnel_height or 1)) or
+  "unset"
   target.write(short(
   "Drop " .. util.formatPos(cfg.dropoff) .. "  Fuel " .. util.formatPos(cfg.fuel) .. "  Mine " .. mine, w))
 
@@ -540,14 +559,21 @@ local function handleKey(char)
     showAddTurtle()
   elseif char == "g" or char == "G" then
     cfg.mining_enabled = not cfg.mining_enabled
+    if cfg.mining_enabled then
+      cfg.paused = false
+      cfg.recall_all = false
+      sendAll("resume", {})
+    end
     saveAll()
     if cfg.mining_enabled then assignJobsToIdle() end
   elseif char == "p" or char == "P" then
     cfg.paused = not cfg.paused
+    if not cfg.paused then cfg.recall_all = false end
     saveAll()
     sendAll(cfg.paused and "pause" or "resume", {})
   elseif char == "r" or char == "R" then
     cfg.paused = true
+    cfg.recall_all = true
     saveAll()
     sendAll("recall", { home = cfg.dropoff or cfg.base })
   elseif char == "v" or char == "V" then
@@ -562,6 +588,37 @@ local function handleKey(char)
     saveAll()
   elseif char == "q" or char == "Q" then
     if confirmQuit() then running = false end
+  end
+end
+
+local function recallComplete()
+  for _, id in ipairs(sortedIds()) do
+    local t = turtles[id]
+    local live = t and t.last_seen and os.clock() - t.last_seen <= (cfg.turtle_status_timeout or 25)
+    if live then
+      local st = t.status or "unknown"
+      if st == "moving" or st == "mining" or st == "returning" or st == "unloading" or st == "to_fuel" or st == "refueling" or st == "assigned" then
+        return false
+      end
+    end
+  end
+  return true
+end
+
+local function recallPulseLoop()
+  local lastPulse = 0
+  while running do
+    if cfg.recall_all then
+      if os.clock() - lastPulse >= (cfg.recall_rebroadcast_seconds or 2) then
+        lastPulse = os.clock()
+        sendAll("recall", { home = cfg.dropoff or cfg.base })
+      end
+      if recallComplete() then
+        cfg.recall_all = false
+        saveAll()
+      end
+    end
+    sleep(0.5)
   end
 end
 
@@ -600,7 +657,7 @@ rednet.host(protocol.NAME_DISCOVERY, "minenet-server")
 print("MineNet server started on modem " .. tostring(side))
 sleep(0.5)
 
-parallel.waitForAny(networkLoop, monitorLoop, uiLoop)
+parallel.waitForAny(networkLoop, monitorLoop, recallPulseLoop, uiLoop)
 saveAll()
 util.clear(term)
 print("MineNet server stopped. Data saved.")

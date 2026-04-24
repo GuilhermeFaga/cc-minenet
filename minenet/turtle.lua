@@ -124,7 +124,14 @@ local function discoverServer()
       cfg.area = p.area or cfg.area
       cfg.branch_length = p.branch_length or cfg.branch_length
       cfg.branch_spacing = p.branch_spacing or cfg.branch_spacing
+      cfg.tunnel_width = p.tunnel_width or cfg.tunnel_width
       cfg.tunnel_height = p.tunnel_height or cfg.tunnel_height
+      cfg.fuel_min = p.fuel_min or cfg.fuel_min
+      cfg.fuel_margin = p.fuel_margin or cfg.fuel_margin
+      cfg.fuel_target = p.fuel_target or cfg.fuel_target
+      cfg.player_resume_fuel = p.player_resume_fuel or cfg.player_resume_fuel
+      if p.keep_fuel_on_unload ~= nil then cfg.keep_fuel_on_unload = p.keep_fuel_on_unload end
+      cfg.fuel_keep_items = p.fuel_keep_items or cfg.fuel_keep_items
       configMod.save(cfg)
       saveIdentity()
       nav.setServer(serverId, cfg.token, identity.turtle_id)
@@ -146,8 +153,8 @@ local function minimumFuelTo(point)
   return util.dist(nav.pos, point) + margin
 end
 
-local function enterOutOfFuel(minFuel, why)
-  minFuel = math.max(minFuel or 1, 1)
+local function enterOutOfFuel(minFuel, why, allowPartial)
+  minFuel = math.max(minFuel or (cfg.player_resume_fuel or 1), cfg.player_resume_fuel or 1)
   if fuel.limit() > 0 then minFuel = math.min(minFuel, fuel.limit()) end
   setStatus("out_of_fuel", why or "Insert coal/fuel into this turtle")
   term.clear()
@@ -155,16 +162,19 @@ local function enterOutOfFuel(minFuel, why)
   print("MineNet turtle is OUT OF FUEL")
   print("Insert coal/charcoal/coal block/lava bucket.")
   print("Needed fuel: " .. tostring(minFuel))
+  print("Any usable fuel lets me resume and seek station.")
   report("status")
 
   while running do
-    local ok = fuel.tryRefuelTo(minFuel, true)
-    if ok or fuel.level() >= minFuel then
-      setStatus("idle", nil)
-      report("status", { event = "refueled_by_player" })
+    local before = fuel.level()
+    local ok, consumed = fuel.tryRefuelTo(minFuel, true)
+    local after = fuel.level()
+    if ok or after >= minFuel or (allowPartial ~= false and after > 0 and (after > before or (consumed or 0) > 0)) then
+      setStatus("refueled", nil)
+      report("status", { event = "manual_fuel_added", needed = minFuel })
       return true
     end
-    term.setCursorPos(1, 5)
+    term.setCursorPos(1, 6)
     term.clearLine()
     term.write("Fuel: " .. fuelText() .. "  waiting...")
     report("status")
@@ -175,10 +185,13 @@ end
 
 local function ensureFuelForMove(to)
   if fuel.rawLevel() == "unlimited" then return true end
+  if fuel.level() < (cfg.fuel_min or 40) then
+    fuel.tryRefuelTo(cfg.fuel_min or 40, true)
+  end
   if fuel.level() >= 1 then return true end
-  fuel.tryRefuelTo(cfg.fuel_min or 40, true)
-  if fuel.level() >= 1 then return true end
-  return enterOutOfFuel(1, "Insert fuel so I can move")
+  local ok, reason = enterOutOfFuel(1, "Insert fuel so I can move", true)
+  if ok and fuel.level() >= 1 then return true end
+  return false, reason or "out_of_fuel"
 end
 
 nav.beforeMove = ensureFuelForMove
@@ -190,18 +203,18 @@ local function suckBySide(side)
   return turtle.suck()
 end
 
-local function dropBySide(side)
+local function dropBySide(side, count)
   side = side or "front"
-  if side == "up" then return turtle.dropUp() end
-  if side == "down" then return turtle.dropDown() end
-  return turtle.drop()
+  if side == "up" then return turtle.dropUp(count) end
+  if side == "down" then return turtle.dropDown(count) end
+  return turtle.drop(count)
 end
 
 local function faceStation(station)
   if station and station.heading ~= nil then nav.face(station.heading) end
 end
 
-local function goFuelStation(targetFuel)
+local function goFuelStation(targetFuel, resumeStatus)
   if not cfg.fuel then return false, "no_fuel_station" end
   if fuel.rawLevel() == "unlimited" then return true end
   targetFuel = math.min(targetFuel or cfg.fuel_target or 800, fuel.limit())
@@ -211,7 +224,8 @@ local function goFuelStation(targetFuel)
     fuel.tryRefuelTo(neededToReach, true)
   end
   if fuel.level() < neededToReach then
-    return enterOutOfFuel(neededToReach, "Need fuel to reach fuel station")
+    local ok = enterOutOfFuel(neededToReach, "Need fuel to reach fuel station", true)
+    if not ok then return false, "out_of_fuel" end
   end
 
   setStatus("to_fuel", nil)
@@ -227,14 +241,14 @@ local function goFuelStation(targetFuel)
   for i = 1, attempts do
     fuel.tryRefuelTo(targetFuel, true)
     if fuel.level() >= targetFuel then
-      setStatus("idle", nil)
+      setStatus(resumeStatus or "idle", nil)
       report("status", { event = "refueled_at_station" })
       return true
     end
     suckBySide(cfg.fuel.side or "front")
     fuel.tryRefuelTo(targetFuel, true)
     if fuel.level() >= targetFuel then
-      setStatus("idle", nil)
+      setStatus(resumeStatus or "idle", nil)
       report("status", { event = "refueled_at_station" })
       return true
     end
@@ -243,10 +257,18 @@ local function goFuelStation(targetFuel)
     sleep(1.5)
   end
 
-  return enterOutOfFuel(targetFuel, "Fuel station empty; insert fuel")
+  if fuel.level() <= 0 then
+    enterOutOfFuel(1, "Fuel station empty; insert fuel", true)
+  end
+  if fuel.level() > 0 then
+    setStatus(resumeStatus or "idle", "Fuel station did not reach target")
+    report("status", { event = "fuel_station_partial" })
+    return false, "fuel_station_empty"
+  end
+  return false, "fuel_station_empty"
 end
 
-local function ensureFuelForRoute(dest)
+local function ensureFuelForRoute(dest, resumeStatus)
   if fuel.rawLevel() == "unlimited" then return true end
   local need = math.max(minimumFuelTo(dest), cfg.fuel_min or 40)
   if fuel.level() >= need then return true end
@@ -254,17 +276,35 @@ local function ensureFuelForRoute(dest)
   fuel.tryRefuelTo(math.max(need, cfg.fuel_target or 800), true)
   if fuel.level() >= need then return true end
 
-  if cfg.fuel and nav.pos and util.dist(nav.pos, cfg.fuel) + 2 <= fuel.level() then
-    local ok = goFuelStation(math.max(need, cfg.fuel_target or 800))
-    if ok and fuel.level() >= need then return true end
+  if cfg.fuel and nav.pos then
+    local ok = goFuelStation(math.max(need, cfg.fuel_target or 800), resumeStatus or status)
+    if ok and fuel.level() >= math.min(need, fuel.limit()) then return true end
+    if fuel.level() > 0 then return true end
   end
 
-  return enterOutOfFuel(need, "Need more fuel for safe route")
+  local ok = enterOutOfFuel(need, "Need more fuel for safe route", true)
+  if ok and fuel.level() > 0 then return true end
+  return false, "out_of_fuel"
 end
 
-local function shouldKeepSlotOnUnload(slot)
-  if not cfg.keep_fuel_on_unload then return false end
-  return fuel.isPreferredFuelSlot(slot)
+local function unloadSlot(slot, side, keepCount)
+  turtle.select(slot)
+  local blocked = false
+  local attempts = 0
+  while turtle.getItemCount(slot) > keepCount and attempts < 6 do
+    attempts = attempts + 1
+    local before = turtle.getItemCount(slot)
+    local amount = before - keepCount
+    local ok = dropBySide(side, amount)
+    sleep(0.15)
+    local after = turtle.getItemCount(slot)
+    if after <= keepCount then return true end
+    if not ok or after >= before then
+      blocked = true
+      break
+    end
+  end
+  return not blocked and turtle.getItemCount(slot) <= keepCount
 end
 
 local function unloadInventory()
@@ -274,7 +314,8 @@ local function unloadInventory()
     return false, "no_dropoff"
   end
 
-  ensureFuelForRoute(cfg.dropoff)
+  local resumeStatus = status
+  ensureFuelForRoute(cfg.dropoff, "returning")
   setStatus("returning", nil)
   report("status")
   local ok, reason = nav.goTo(cfg.dropoff, { dig = true })
@@ -283,14 +324,51 @@ local function unloadInventory()
   faceStation(cfg.dropoff)
   setStatus("unloading", nil)
   report("status")
-  for i = 1, 16 do
-    turtle.select(i)
-    if turtle.getItemCount(i) > 0 and not shouldKeepSlotOnUnload(i) then
-      dropBySide(cfg.dropoff.side or "front")
+
+  local side = cfg.dropoff.side or "front"
+  local keepFuel = cfg.keep_fuel_on_unload ~= false
+  local fuelReserve = keepFuel and (cfg.fuel_keep_items or 1) or 0
+  local keptFuel = 0
+  local blocked = false
+  local finalBlocked = false
+
+  for pass = 1, 2 do
+    for i = 1, 16 do
+      local count = turtle.getItemCount(i)
+      if count > 0 then
+        local keep = 0
+        if keepFuel and fuel.isPreferredFuelSlot(i) and keptFuel < fuelReserve then
+          keep = math.min(count, fuelReserve - keptFuel)
+          keptFuel = keptFuel + keep
+        end
+        if not unloadSlot(i, side, keep) then blocked = true end
+      end
     end
+    if not blocked then break end
+    setStatus("dropoff_full", "Drop-off chest full or unreachable")
+    report("status")
+    finalBlocked = true
+    sleep(cfg.dropoff_wait or 5)
+    blocked = false
   end
+
   turtle.select(1)
-  setStatus("idle", nil)
+
+  local leftover = 0
+  for i = 1, 16 do
+    if turtle.getItemCount(i) > 0 then leftover = leftover + 1 end
+  end
+  if leftover > (fuelReserve > 0 and 1 or 0) and finalBlocked then
+    setStatus("dropoff_full", "Could not unload all items")
+    report("status")
+    return false, "dropoff_full"
+  end
+
+  if currentJob then
+    setStatus(resumeStatus == "unloading" and "moving" or resumeStatus, nil)
+  else
+    setStatus("idle", nil)
+  end
   report("status", { event = "unloaded" })
   return true
 end
@@ -350,15 +428,22 @@ end
 local function maybeHandleRecall()
   if recallRequested then
     local home = cfg.dropoff or cfg.base
+    local ok, reason = true, nil
     if home then
-      ensureFuelForRoute(home)
-      nav.goTo(home, { dig = true })
-      if cfg.dropoff then unloadInventory() end
+      ok, reason = ensureFuelForRoute(home, "returning")
+      if ok then ok, reason = nav.goTo(home, { dig = true }) end
+      if ok and cfg.dropoff then unloadInventory() end
     end
-    recallRequested = false
-    setStatus("idle", nil)
-    report("status", { event = "recall_complete" })
-    return true
+    if ok then
+      recallRequested = false
+      currentJob = nil
+      setStatus("idle", nil)
+      report("status", { event = "recall_complete", clear_job = true })
+      return true
+    end
+    setStatus("recall_blocked", reason or "Could not return home")
+    report("status")
+    return false
   end
   return false
 end
@@ -370,11 +455,11 @@ local function maintainBeforeWork(dest)
 
   local resume = nav.current()
   local target = dest or nav.pos
-  local ok, reason = ensureFuelForRoute(target)
+  local ok, reason = ensureFuelForRoute(target, status)
   if not ok then return false, reason end
 
   if target and nav.pos and util.dist(nav.pos, target) > 0 then
-    ok, reason = ensureFuelForRoute(target)
+    ok, reason = ensureFuelForRoute(target, status)
     if not ok then return false, reason end
     ok, reason = nav.goTo(target, { dig = true })
     if not ok then return false, reason end
@@ -385,7 +470,7 @@ local function maintainBeforeWork(dest)
   if not ok then return false, reason end
 
   if target and nav.pos and util.dist(nav.pos, target) > 0 then
-    ok, reason = ensureFuelForRoute(target)
+    ok, reason = ensureFuelForRoute(target, status)
     if not ok then return false, reason end
     ok, reason = nav.goTo(target, { dig = true })
     if not ok then return false, reason end
@@ -395,27 +480,74 @@ local function maintainBeforeWork(dest)
   return true
 end
 
-local function digTunnelHeight(height)
-  height = height or 2
+local function clearColumn(height)
+  height = math.max(tonumber(height) or 1, 1)
   if height <= 1 then return true end
-  nav.digUp()
-  if height <= 2 then return true end
-  for level = 3, height do
-    local ok = nav.up(true)
-    if not ok then return false end
+
+  for level = 2, height do
     nav.digUp()
+    if level < height then
+      local ok = nav.up(true)
+      if not ok then return false end
+    end
   end
-  for level = 3, height do
+
+  for level = 2, height - 1 do
     local ok = nav.down(false)
     if not ok then return false end
   end
   return true
 end
 
+local function moveSideStep(direction, baseHeading)
+  local sideHeading = direction == "right" and ((baseHeading + 1) % 4) or ((baseHeading + 3) % 4)
+  nav.face(sideHeading)
+  local ok, reason = nav.forward(true)
+  nav.face(baseHeading)
+  return ok, reason
+end
+
+local function clearTunnelSlice(width, height, baseHeading)
+  width = math.max(tonumber(width) or 1, 1)
+  height = math.max(tonumber(height) or 1, 1)
+  baseHeading = util.normHeading(baseHeading or nav.heading or 1)
+
+  nav.face(baseHeading)
+  local ok, reason = clearColumn(height)
+  if not ok then return false, reason end
+
+  local right = math.floor((width - 1) / 2)
+  local left = (width - 1) - right
+
+  for i = 1, right do
+    ok, reason = moveSideStep("right", baseHeading)
+    if not ok then return false, reason end
+    ok, reason = clearColumn(height)
+    if not ok then return false, reason end
+  end
+  for i = 1, right do
+    ok, reason = moveSideStep("left", baseHeading)
+    if not ok then return false, reason end
+  end
+
+  for i = 1, left do
+    ok, reason = moveSideStep("left", baseHeading)
+    if not ok then return false, reason end
+    ok, reason = clearColumn(height)
+    if not ok then return false, reason end
+  end
+  for i = 1, left do
+    ok, reason = moveSideStep("right", baseHeading)
+    if not ok then return false, reason end
+  end
+
+  nav.face(baseHeading)
+  return true
+end
+
 local function mineBranch(job)
   busy = true
   currentJob = job
-  recallRequested = false
   setStatus("moving", nil)
   report("status", { job_id = job.id })
 
@@ -439,7 +571,16 @@ local function mineBranch(job)
   report("status")
 
   local length = job.length or cfg.branch_length or 48
-  local height = job.height or cfg.tunnel_height or 2
+  local width = job.width or cfg.tunnel_width or 3
+  local height = job.height or cfg.tunnel_height or 3
+  local okSlice, sliceReason = clearTunnelSlice(width, height, job.heading or 1)
+  if not okSlice then
+    setStatus("error", sliceReason)
+    report("job_failed", { job_id = job.id, reason = sliceReason })
+    currentJob = nil
+    busy = false
+    return false, sliceReason
+  end
   for step = 1, length do
     if not running then break end
     pollControlOnce()
@@ -450,7 +591,15 @@ local function mineBranch(job)
       busy = false
       return false, "recalled"
     end
-    maintainBeforeWork(nav.pos)
+    local maintained, maintainReason = maintainBeforeWork(nav.pos)
+    if not maintained then
+      report("job_failed", { job_id = job.id, reason = maintainReason, progress = step })
+      currentJob = nil
+      busy = false
+      return false, maintainReason
+    end
+    setStatus("mining", nil)
+    nav.face(job.heading or 1)
 
     nav.digForward()
     local ok, reason = nav.forward(true)
@@ -461,13 +610,20 @@ local function mineBranch(job)
       busy = false
       return false, reason
     end
-    digTunnelHeight(height)
+    ok, reason = clearTunnelSlice(width, height, job.heading or 1)
+    if not ok then
+      setStatus("error", reason)
+      report("job_failed", { job_id = job.id, reason = reason, progress = step })
+      currentJob = nil
+      busy = false
+      return false, reason
+    end
     report("status", { progress = step, total = length })
   end
 
   if cfg.dropoff then unloadInventory() end
   setStatus("idle", nil)
-  report("job_done", { job_id = job.id, pos = nav.current() })
+  report("job_done", { job_id = job.id, pos = nav.current(), clear_job = true })
   currentJob = nil
   busy = false
   return true
@@ -490,7 +646,7 @@ local function commandLoop()
       elseif msg.type == "go_unload" and not busy then
         unloadInventory()
       elseif msg.type == "go_fuel" and not busy then
-        goFuelStation(cfg.fuel_target or 800)
+        goFuelStation(cfg.fuel_target or 800, "idle")
       elseif msg.type == "pause" then
         paused = true
       elseif msg.type == "resume" then
@@ -509,7 +665,7 @@ local function commandLoop()
 
     if not busy and not paused and os.clock() - lastJobRequest > 5 then
       lastJobRequest = os.clock()
-      if status == "idle" then report("need_job") end
+      if status == "idle" or status == "refueled" then report("need_job") end
     end
   end
 end

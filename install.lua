@@ -1,40 +1,42 @@
-local repo = "https://raw.githubusercontent.com/GuilhermeFaga/cc-minenet/main/"
-local files = {
-  "config.lua",
-  "fuel.lua",
-  "nav.lua",
-  "protocol.lua",
-  "server.lua",
-  "storage.lua",
-  "turtle.lua",
-  "util.lua"
-}
+-- MineNet GitHub installer for CC:Tweaked
+-- Usage:
+--   wget https://raw.githubusercontent.com/GuilhermeFaga/cc-minenet/main/install.lua install
+--   install
 
+local owner = "GuilhermeFaga"
+local repo = "cc-minenet"
+local branch = "main"
+local base = "https://raw.githubusercontent.com/" .. owner .. "/" .. repo .. "/" .. branch .. "/"
 local target = "/minenet"
 
-if fs.exists(target) then
-  print("Removing old /minenet")
-  fs.delete(target)
-end
+local files = {
+  "protocol.lua",
+  "storage.lua",
+  "util.lua",
+  "config.lua",
+  "fuel.lua",
+  "server.lua",
+  "nav.lua",
+  "turtle.lua"
+}
 
-fs.makeDir(target)
-
-for _, file in ipairs(files) do
-  local url = repo .. "minenet/" .. file
-  local out = target .. "/" .. file
-
-  print("Downloading " .. file)
-  local ok, err = pcall(function()
-    shell.run("wget", url, out)
-  end)
-
+local function download(url, out)
+  if fs.exists(out) then fs.delete(out) end
+  local ok = shell.run("wget", url, out)
   if not ok or not fs.exists(out) then
-    error("Failed to download " .. file .. ": " .. tostring(err))
+    error("Failed to download " .. url)
   end
 end
 
-print("Install complete.")
-print("Run:")
-print("  cd /minenet")
-print("  server.lua  -- on computer")
-print("  turtle.lua  -- on turtle")
+print("Installing MineNet from GitHub...")
+if fs.exists(target) then fs.delete(target) end
+fs.makeDir(target)
+
+for _, file in ipairs(files) do
+  print("- " .. file)
+  download(base .. "minenet/" .. file, target .. "/" .. file)
+end
+
+print("Done.")
+print("Run on server: cd /minenet && server.lua")
+print("Run on turtle: cd /minenet && turtle.lua")
